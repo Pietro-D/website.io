@@ -17,7 +17,7 @@ permalink: /projects/
     
     <div class="project-card">
       {% if project.image %}
-        <img src="{{ project.image }}" class="card-img" alt="{{ project.title }}">
+        <img src="{{ site.baseurl }}{{ project.image }}" class="card-img" alt="{{ project.title }}">
       {% else %}
         <img src="https://via.placeholder.com/600x400?text={{ project.title | url_encode }}" class="card-img" alt="Placeholder">
       {% endif %}
@@ -32,7 +32,7 @@ permalink: /projects/
           {% endfor %}
         </div>
 
-        <a href="{{ project.url }}" class="card-link">View Project →</a>
+        <a href="{{ site.baseurl }}{{ project.url }}" class="card-link">View Project →</a>
       </div>
     </div>
 
