@@ -2,7 +2,7 @@
 layout: project
 title: Ball Detection in Soccer Videos
 description: Detecting the soccer ball in match videos using YOLO and modern object detection techniques.
-image: {{ site.baseurl }}/assets/images/footballdetection.png
+image: /assets/images/footballdetection.png
 github_link: https://github.com/Pietro-D/balltracking
 tools: [Python, Object Detection, Yolo, OpenCV]
 permalink: /projects/balldetection/
