@@ -5,7 +5,7 @@ title: Home
 
 <div class="hero-container">
   <div class="hero-image-side">
-    <img src="\assets\images\profile.jpeg" alt="Pietro" class="hero-profile-img">
+    <img src="{{ site.baseurl }}\assets\images\profile.jpeg" alt="Pietro" class="hero-profile-img">
   </div>
 
   <div class="hero-content-main">
@@ -27,8 +27,8 @@ title: Home
   </div>
 
   <div class="hero-cta">
-    <a href="/about/" class="btn btn-primary">Full Background</a>
-    <a href="/projects/" class="btn btn-outline">View Projects</a>
+    <a href="{{ site.baseurl }}/about/" class="btn btn-primary">Full Background</a>
+    <a href="{{ site.baseurl }}/projects/" class="btn btn-outline">View Projects</a>
   </div>
 </div>
 
