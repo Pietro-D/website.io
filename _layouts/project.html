@@ -1,0 +1,157 @@
+---
+layout: default
+---
+
+<style>
+/* 1. TYPOGRAPHY & CORE */
+.project-header {
+  margin-bottom: 40px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 30px;
+}
+
+.project-header h1 {
+  font-size: 2.8rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin-bottom: 10px;
+  color: var(--secondary-color);
+}
+
+.main-text-content {
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  font-size: 1.1rem;
+  color: #334155;
+  line-height: 1.8;
+  max-width: 850px;
+  margin-top: 40px;
+}
+
+/* Styling for Markdown Headers in Content */
+.main-text-content h2 { margin-top: 2em; color: var(--secondary-color); font-weight: 700; }
+.main-text-content h3 { margin-top: 1.5em; color: var(--secondary-color); font-weight: 600; }
+
+/* 2. LAYOUT STRUCTURE */
+.project-layout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 40px;
+  margin-bottom: 40px;
+}
+
+.project-image-container {
+  flex: 3;
+  min-width: 320px;
+}
+
+.project-image-container img {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+}
+
+/* 3. SIDEBAR & TOOLS */
+.project-sidebar {
+  flex: 1;
+  min-width: 250px;
+  border: 1px solid var(--border-color);
+  background: #ffffff;
+  padding: 24px;
+  border-radius: 12px;
+  height: fit-content;
+}
+
+.sidebar-label {
+  font-family: var(--font-code);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #94a3b8;
+  margin-bottom: 12px;
+}
+
+.skill-tag {
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  font-weight: 500;
+  background: var(--light-gray);
+  border: 1px solid var(--border-color);
+  padding: 4px 10px;
+  border-radius: 6px;
+  margin: 0 4px 8px 0;
+  display: inline-block;
+  color: var(--secondary-color);
+}
+
+/* 4. BUTTONS & CODE */
+.btn-github {
+  background: #0f172a;
+  color: white !important;
+  text-decoration: none;
+  font-family: var(--font-code);
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.btn-github:hover {
+  background: #1e293b;
+  transform: translateY(-2px);
+}
+
+.main-text-content pre {
+  padding: 20px;
+  background: #1e293b;
+  color: #f8fafc;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 20px 0;
+}
+
+/* MathJax spacing */
+.mjx-chtml { margin: 1.5em 0; }
+</style>
+
+<div class="project-header">
+  <h1>{{ page.title }}</h1>
+  <p style="font-size: 1.2rem; color: #64748b;">{{ page.description }}</p>
+</div>
+
+<div class="project-layout">
+  <div class="project-image-container">
+    {% if page.image %}
+      <img src="{{ page.image }}" alt="{{ page.title }}">
+    {% endif %}
+  </div>
+
+  <div class="project-sidebar">
+    {% if page.github_link %}
+    <div class="sidebar-section">
+      <a href="{{ page.github_link }}" target="_blank" class="btn-github">
+        View Source on GitHub
+      </a>
+    </div>
+    {% endif %}
+
+    <div class="sidebar-section" style="margin-top: 25px;">
+      <div class="sidebar-label">Stack & Tools</div>
+      <div class="tag-container">
+        {% for tool in page.tools %}
+          <span class="skill-tag">{{ tool }}</span>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="text/javascript" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+<div class="main-text-content">
+  {{ content }}
+</div>

@@ -1,0 +1,698 @@
+<h2 id="table-of-contents">Table of Contents</h2>
+<p><a href="#itroduction">Introduction</a><br />
+<a href="#utility-functions">Utility Functions</a><br />
+<a href="#system-prompts">System Prompts</a><br />
+<a href="#defining-the-server-client-infrastructure">Defining the Server-Client Infrastructure</a><br />
+<a href="#python-tool">Python Tool</a><br />
+<a href="#inference">Inference</a><br />
+<a href="#evaluation">Evaluation</a></p>
+<h2 id="introduction">Introduction</h2>
+<p>Despite the significant advancements in Large Language Models (LLMs) in
+recent years, complex reasoning tasks such as advanced mathematics and
+programming remain a major challenge, even for the most powerful models.
+Standard benchmarks such as <b>MATH</b>, <b>GSM8K</b> and
+<b>AIME2025</b> show many models achieving high accuracy scores; however, performance drops significantly when tackling truly difficult problems.
+In particular, LLMs still struggle with problems at the level of the <b>
+International Mathematical Olympiad (IMO)</b>. To date, only two models
+have reportedly reached a gold-medal standard at the IMO: an advanced
+version of <a href="https://deepmind.google/blog/advanced-version-of-gemini-with-deep-think-officially-achieves-gold-medal-standard-at-the-international-mathematical-olympiad/">Gemini</a> 
+developed by DeepMind and a model from <a href="https://x.com/OpenAI/status/1946594928945148246">OpenAI</a>.
+Both are closed-source, highlighting the significant gap between open and proprietary models</p>
+
+<p>The goal of this project is to evaluate the real capabilities of
+open-source models by developing an inference pipeline specifically
+designed to solve hard mathematical problems. For this purpose, I selected <b>GPT-OSS-120B</b>, a model with strong reasoning abilities 
+released by OpenAI. One of its key advantages is the ability to integrate reasoning with external tools such as Python and web browser.</p>
+
+<p>The strategy I decided to implement is the following one: for each problem,
+the model performs <b>8 parallel generations</b>, each initialized with a different system prompt to encourage diversity. 
+Each generation is treated as a <b> continuous refinement process 
+augmented with tool execution </b>, also known as <b>
+Tool Integrated Reasoning </b>.
+This tecniques has been shown to significantly improve LLM performance 
+on complex reasoning tasks <a href="https://arxiv.org/abs/2508.19201">(Heng Lin, Zhongwen Xu)</a>.</p>
+
+<p>The process can be summarized as follows:</p>
+
+<p>1)Generate a fixed number of tokens (e.g 2048)<br />
+2)If python code is present, execute it and extract the results.<br />
+3)Append both the execution results and the model’s response to the conversation
+context.<br />
+4)Repeat the process until an answer enclosed in
+<code class="language-plaintext highlighter-rouge">\\boxed{}</code>
+is produced.<br />
+<br />
+This iterative approach allows the model to adjust its reasoning path based
+on the results of code execution.
+Once all generations are complete, the final answer is selected using
+a <b>majority vote</b> across the 8 solutions.
+To improve efficiency and reduce unnecessary computation, I also
+implemented a simple early stopping mechanism that terminates all
+generations as soon as the same answer is produced three times.
+For simplicity, this project currently focuses on problems
+with integer solutions between 0 and 99.999, but the approach can be
+easily extended.</p>
+
+<h2 id="utility-functions">Utility Functions</h2>
+
+<p>First, I defined a function <b>extract_boxed_text</b>, which searches
+for a <code class="language-plaintext highlighter-rouge">\\boxed{}</code> element in a string and
+returns its content. If multiple boxed elements are found, the function returns the last one.</p>
+
+<figure class="highlight"><pre><code class="language-python" data-lang="python"><span class="k">def</span> <span class="nf">extract_boxed_text</span><span class="p">(</span><span class="n">text</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="sh">"""</span><span class="s">Extract text inside </span><span class="se">\\</span><span class="s">boxed{} from LaTeX-formatted text</span><span class="sh">"""</span>
+    <span class="kn">import</span> <span class="n">re</span>
+
+    <span class="n">pattern</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="sa">r</span><span class="sh">"</span><span class="s">oxed{(.*?)}</span><span class="sh">"</span>
+    <span class="n">matches</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">re</span><span class="p">.</span><span class="nf">findall</span><span class="p">(</span><span class="n">pattern</span><span class="p">,</span> <span class="n">text</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">matches</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sh">""</span>
+    <span class="k">for</span> <span class="k">match</span> <span class="ow">in</span> <span class="n">matches</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="k">match</span> <span class="o">!=</span> <span class="sh">""</span><span class="p">:</span>
+            <span class="k">return</span> <span class="k">match</span>
+    <span class="k">return</span> <span class="sh">""</span></code></pre></figure>
+
+<p>Next, I implemented a function to check whether the string extracted from
+the boxed element is a valid answer. As discussed earlier
+I took into account only problems with integer solutions in the range [0,99.999]. However, this function 
+can be easily extended to handle other types of solutions, such as
+floating pointing numbers.</p>
+
+<figure class="highlight"><pre><code class="language-python" data-lang="python"><span class="k">def</span> <span class="nf">is_valid_answer_string</span><span class="p">(</span><span class="n">text</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">if</span> <span class="nf">int</span><span class="p">(</span><span class="n">text</span><span class="p">)</span> <span class="o">==</span> <span class="nf">float</span><span class="p">(</span><span class="n">text</span><span class="p">):</span>
+            <span class="k">if</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="nf">int</span><span class="p">(</span><span class="n">text</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mi">99_999</span><span class="p">:</span>
+                <span class="k">return</span> <span class="bp">True</span>
+    <span class="k">except</span> <span class="nb">Exception</span><span class="p">:</span>
+        <span class="k">pass</span>
+    <span class="k">return</span> <span class="bp">False</span></code></pre></figure>
+
+<p>To implement the voting mechanism, I defined a global dictionary that keeps track of the answers provided by the model for each question.
+Each problem is assumed to have a unique id.
+The function <b>vote_answer</b> updates the global dictionary and marks
+a question as completed if the model returns the same answer three times.
+If not, the system waits for all 8 generations to complete before selecting the final answer.</p>
+
+<figure class="highlight"><pre><code class="language-python" data-lang="python"><span class="n">completed_question_ids</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="nf">set</span><span class="p">()</span>
+<span class="n">question_id_to_counter</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Counter</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="sh">""</span><span class="p">:</span> <span class="nc">Counter</span><span class="p">()}</span>
+
+<span class="k">def</span> <span class="nf">vote_answer</span><span class="p">(</span><span class="n">question_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span> <span class="o">|</span> <span class="bp">None</span><span class="p">:</span>
+    <span class="c1"># reads counter from global
+</span>    <span class="n">counter</span> <span class="o">=</span> <span class="n">question_id_to_counter</span><span class="p">[</span><span class="n">question_id</span><span class="p">]</span>
+    <span class="n">most_common</span> <span class="o">=</span> <span class="n">counter</span><span class="p">.</span><span class="nf">most_common</span><span class="p">(</span><span class="mi">1</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">answer</span><span class="p">,</span> <span class="n">count</span> <span class="o">=</span> <span class="n">most_common</span>
+    
+    <span class="c1"># Early stop if we have 3+ votes for same answer
+</span>    <span class="k">if</span> <span class="n">count</span> <span class="o">&gt;=</span> <span class="mi">3</span><span class="p">:</span>
+        <span class="n">completed_question_ids</span><span class="p">.</span><span class="nf">add</span><span class="p">(</span><span class="n">question_id</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">answer</span>
+    <span class="k">return</span> <span class="n">answer</span></code></pre></figure>
+
+<h2 id="system-prompts">System Prompts</h2>
+<p>The following are the 8 system prompts used in the project.
+Each prompt explicitly encourages the model to utilize Python for
+intermediate computations, helping it reason more accurately and efficiently.</p>
+
+<figure class="highlight"><pre><code class="language-python" data-lang="python"><span class="n">SYSTEM_PROMPTS</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="sh">"""</span><span class="s">You will solve this problem step-by-step using the python tool for ALL calculations, intermediate steps, 
+    and verification. Break down complex problems into smaller computational steps. Use the tool to: 
+    (1) parse and validate input data, (2) perform all arithmetic operations, (3) implement algorithms iteratively, 
+    (4) verify intermediate results, and (5) cross-check your final answer. Think through the problem logically, 
+    then execute each step computationally. Return the final answer in </span><span class="se">\\</span><span class="s">boxed{}. 
+    The answer is expected to be an integer between 0 and 99999 inclusive.</span><span class="sh">"""</span><span class="p">,</span>
+    
+    <span class="sh">"""</span><span class="s">Approach this problem by integrating reasoning with computation. 
+    First, analyze the problem structure and develop a solution strategy. Then use the python tool to: 
+    (1) test your approach on simple cases, (2) implement helper functions for complex operations, 
+    (3) perform all numerical computations, (4) validate edge cases, and (5) verify your logic with 
+    multiple test scenarios. Use computational exploration to refine your understanding. 
+    Let calculations guide your reasoning process. Return the final answer in </span><span class="se">\\</span><span class="s">boxed{}. 
+    The answer is expected to be an integer between 0 and 99999 inclusive.</span><span class="sh">"""</span><span class="p">,</span>
+    
+    <span class="sh">"""</span><span class="s">Solve this problem using iterative tool-assisted reasoning. Use the python tool as an extension of your 
+    thinking process to: (1) explore the problem space computationally, (2) test hypotheses with concrete calculations,
+    (3) implement and debug solution algorithms step-by-step, (4) perform intermediate verifications to catch errors early,
+    and (5) conduct sensitivity analysis on your results. Don</span><span class="sh">'</span><span class="s">t just calculate—use the tool to think through the problem, 
+    discover patterns, and validate your reasoning at each stage. Return the final answer in </span><span class="se">\\</span><span class="s">boxed{}. 
+    The answer is expected to be an integer between 0 and 99999 inclusive.</span><span class="sh">"""</span><span class="p">,</span>
+    
+    <span class="sh">"""</span><span class="s">You will solve this problem by deeply integrating computational tools with analytical reasoning. 
+    Use the python tool proactively throughout your solution process to: (1) computationally verify each logical step, 
+    (2) explore multiple solution approaches empirically, (3) implement sanity checks and boundary condition tests, 
+    (4) simulate or enumerate scenarios when beneficial, and (5) trace through your algorithm with concrete examples. 
+    Make your reasoning explicit, then validate it computationally. Use the tool not just for final calculations, 
+    but as an integral part of your problem-solving process. Return the final answer in </span><span class="se">\\</span><span class="s">boxed{}. 
+    The answer is expected to be an integer between 0 and 99999 inclusive.</span><span class="sh">"""</span><span class="p">,</span>
+
+  <span class="sh">"""</span><span class="s">You will solve this problem step-by-step using the python tool for ALL calculations, intermediate steps, 
+    and verification. Break down complex problems into smaller computational steps. Use the tool to: 
+    (1) parse and validate input data, (2) perform all arithmetic operations, (3) implement algorithms iteratively, 
+    (4) verify intermediate results, and (5) cross-check your final answer. Think through the problem logically, 
+    then execute each step computationally. Return the final answer in </span><span class="se">\\</span><span class="s">boxed{}. 
+    The answer is expected to be an integer between 0 and 99999 inclusive.</span><span class="sh">"""</span><span class="p">,</span>
+    
+    <span class="sh">"""</span><span class="s">Approach this problem by integrating reasoning with computation. 
+    First, analyze the problem structure and develop a solution strategy. Then use the python tool to: 
+    (1) test your approach on simple cases, (2) implement helper functions for complex operations, 
+    (3) perform all numerical computations, (4) validate edge cases, and (5) verify your logic with 
+    multiple test scenarios. Use computational exploration to refine your understanding. 
+    Let calculations guide your reasoning process. Return the final answer in </span><span class="se">\\</span><span class="s">boxed{}. 
+    The answer is expected to be an integer between 0 and 99999 inclusive.</span><span class="sh">"""</span><span class="p">,</span>
+    
+    <span class="sh">"""</span><span class="s">Solve this problem using iterative tool-assisted reasoning. Use the python tool as an extension of your 
+    thinking process to: (1) explore the problem space computationally, (2) test hypotheses with concrete calculations,
+    (3) implement and debug solution algorithms step-by-step, (4) perform intermediate verifications to catch errors early,
+    and (5) conduct sensitivity analysis on your results. Don</span><span class="sh">'</span><span class="s">t just calculate—use the tool to think through the problem, 
+    discover patterns, and validate your reasoning at each stage. Return the final answer in </span><span class="se">\\</span><span class="s">boxed{}. 
+    The answer is expected to be an integer between 0 and 99999 inclusive.</span><span class="sh">"""</span><span class="p">,</span>
+    
+    <span class="sh">"""</span><span class="s">You will solve this problem by deeply integrating computational tools with analytical reasoning. 
+    Use the python tool proactively throughout your solution process to: (1) computationally verify each logical step, 
+    (2) explore multiple solution approaches empirically, (3) implement sanity checks and boundary condition tests, 
+    (4) simulate or enumerate scenarios when beneficial, and (5) trace through your algorithm with concrete examples. 
+    Make your reasoning explicit, then validate it computationally. Use the tool not just for final calculations, 
+    but as an integral part of your problem-solving process. Return the final answer in </span><span class="se">\\</span><span class="s">boxed{}. 
+    The answer is expected to be an integer between 0 and 99999 inclusive.</span><span class="sh">"""</span><span class="p">,</span>
+<span class="p">]</span></code></pre></figure>
+
+<h2 id="defining-the-server-client-infrastructure">Defining the Server-Client Infrastructure</h2>
+<p>Now that the utility functions are defined and the system prompts are ready, the next step is to serve the model using vLLM.</p>
+
+<figure class="highlight"><pre><code class="language-python" data-lang="python"><span class="k">with</span> <span class="nf">open</span><span class="p">(</span><span class="sh">"</span><span class="s">a-vllm.log</span><span class="sh">"</span><span class="p">,</span> <span class="sh">"</span><span class="s">w</span><span class="sh">"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+    <span class="n">f</span><span class="p">.</span><span class="nf">write</span><span class="p">(</span><span class="sh">""</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">start_vllm_server</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">subprocess</span><span class="p">.</span><span class="n">Popen</span><span class="p">[</span><span class="nb">bytes</span><span class="p">]:</span>
+    <span class="sh">"""</span><span class="s">Start vLLM server in the background</span><span class="sh">"""</span>
+    <span class="n">os</span><span class="p">.</span><span class="n">environ</span><span class="p">[</span><span class="sh">"</span><span class="s">TRANSFORMERS_NO_TF</span><span class="sh">"</span><span class="p">]</span> <span class="o">=</span> <span class="sh">"</span><span class="s">1</span><span class="sh">"</span>
+    <span class="n">os</span><span class="p">.</span><span class="n">environ</span><span class="p">[</span><span class="sh">"</span><span class="s">TRANSFORMERS_NO_FLAX</span><span class="sh">"</span><span class="p">]</span> <span class="o">=</span> <span class="sh">"</span><span class="s">1</span><span class="sh">"</span>
+    <span class="n">os</span><span class="p">.</span><span class="n">environ</span><span class="p">[</span><span class="sh">"</span><span class="s">VLLM_ATTENTION_BACKEND</span><span class="sh">"</span><span class="p">]</span> <span class="o">=</span> <span class="sh">"</span><span class="s">TRITON_ATTN</span><span class="sh">"</span>
+    <span class="n">os</span><span class="p">.</span><span class="n">environ</span><span class="p">[</span><span class="sh">"</span><span class="s">TRITON_PTXAS_PATH</span><span class="sh">"</span><span class="p">]</span> <span class="o">=</span> <span class="sh">"</span><span class="s">/usr/local/cuda/bin/ptxas</span><span class="sh">"</span>
+    <span class="n">os</span><span class="p">.</span><span class="n">environ</span><span class="p">[</span><span class="sh">"</span><span class="s">CUDA_VISIBLE_DEVICES</span><span class="sh">"</span><span class="p">]</span> <span class="o">=</span> <span class="sh">"</span><span class="s">0</span><span class="sh">"</span>
+    <span class="c1"># https://docs.vllm.ai/projects/recipes/en/latest/OpenAI/GPT-OSS.html#troubleshooting
+</span>    <span class="n">os</span><span class="p">.</span><span class="n">environ</span><span class="p">[</span><span class="sh">"</span><span class="s">TIKTOKEN_ENCODINGS_BASE</span><span class="sh">"</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="sh">"</span><span class="s">/kaggle/working/tiktoken_encodings</span><span class="sh">"</span>
+    <span class="p">)</span>
+
+    <span class="n">sequence_length</span> <span class="o">=</span> <span class="mi">65_536</span>
+
+    <span class="n">command</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="sh">"</span><span class="s">python</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">-m</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">vllm.entrypoints.openai.api_server</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">--model</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">/kaggle/input/gpt-oss-120b/transformers/default/1</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">--served-model-name</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">vllm-model</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">--tensor-parallel-size</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">1</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">--max-num-seqs</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">8</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">--gpu-memory-utilization</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">0.96</span><span class="sh">"</span><span class="p">,</span>  <span class="c1"># any higher may not have enough for graph capture
+</span>        <span class="sh">"</span><span class="s">--host</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">0.0.0.0</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">--port</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">8000</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">--dtype</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">auto</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">--max-model-len</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sa">f</span><span class="sh">"</span><span class="si">{</span><span class="n">sequence_length</span><span class="si">}</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">--load-format</span><span class="sh">"</span><span class="p">,</span>
+        <span class="sh">"</span><span class="s">fastsafetensors</span><span class="sh">"</span><span class="p">,</span>
+    <span class="p">]</span>
+
+    <span class="c1"># Start the process in the background
+</span>    <span class="k">with</span> <span class="nf">open</span><span class="p">(</span><span class="sh">"</span><span class="s">/kaggle/working/a-vllm.log</span><span class="sh">"</span><span class="p">,</span> <span class="sh">"</span><span class="s">w</span><span class="sh">"</span><span class="p">)</span> <span class="k">as</span> <span class="n">logfile</span><span class="p">:</span>
+        <span class="n">process</span><span class="p">:</span> <span class="n">subprocess</span><span class="p">.</span><span class="n">Popen</span><span class="p">[</span><span class="nb">bytes</span><span class="p">]</span> <span class="o">=</span> <span class="n">subprocess</span><span class="p">.</span><span class="nc">Popen</span><span class="p">(</span>
+            <span class="n">command</span><span class="p">,</span> <span class="n">stdout</span><span class="o">=</span><span class="n">logfile</span><span class="p">,</span> <span class="n">stderr</span><span class="o">=</span><span class="n">subprocess</span><span class="p">.</span><span class="n">STDOUT</span><span class="p">,</span> <span class="n">start_new_session</span><span class="o">=</span><span class="bp">True</span>
+        <span class="p">)</span>
+
+    <span class="nf">print</span><span class="p">(</span><span class="sh">"</span><span class="s">Logs: /kaggle/working/a-vllm.log</span><span class="sh">"</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">process</span>
+
+<span class="c1"># Start the server
+</span><span class="n">vllm_process</span><span class="p">:</span> <span class="n">subprocess</span><span class="p">.</span><span class="n">Popen</span><span class="p">[</span><span class="nb">bytes</span><span class="p">]</span> <span class="o">=</span> <span class="nf">start_vllm_server</span><span class="p">()</span></code></pre></figure>
+
+<p>A few key points about the setup:<br />
+1) The model is loaded in <b>fastsafetensors</b> format, which
+significantly reduces loading time from disk.<br />
+2) Since each question requires 8 parallel candidate solutions,
+the parameter <code class="language-plaintext highlighter-rouge">--max_num_seqs</code> is set to 8.<br />
+3) The maximum context lenght of the model is set to 65.536 tokens, which
+provides a good balance between memory usage and accuracy.<br /></p>
+
+<p>Once the server is running, the next step is to instantiate the client
+using the OpenAI library.</p>
+
+<figure class="highlight"><pre><code class="language-python" data-lang="python"><span class="c1"># Point the client to your local vLLM server
+</span><span class="n">os</span><span class="p">.</span><span class="n">environ</span><span class="p">[</span><span class="sh">"</span><span class="s">OPENAI_API_BASE</span><span class="sh">"</span><span class="p">]</span> <span class="o">=</span> <span class="sh">"</span><span class="s">http://127.0.0.1:8000/v1</span><span class="sh">"</span>
+<span class="n">os</span><span class="p">.</span><span class="n">environ</span><span class="p">[</span><span class="sh">"</span><span class="s">OPENAI_API_KEY</span><span class="sh">"</span><span class="p">]</span> <span class="o">=</span> <span class="sh">"</span><span class="s">sk-local</span><span class="sh">"</span>  <span class="c1"># any non-empty string
+</span>
+<span class="n">client</span><span class="p">:</span> <span class="n">OpenAI</span> <span class="o">=</span> <span class="nc">OpenAI</span><span class="p">(</span>
+    <span class="n">base_url</span><span class="o">=</span><span class="n">os</span><span class="p">.</span><span class="n">environ</span><span class="p">[</span><span class="sh">"</span><span class="s">OPENAI_API_BASE</span><span class="sh">"</span><span class="p">],</span>
+    <span class="n">api_key</span><span class="o">=</span><span class="n">os</span><span class="p">.</span><span class="n">environ</span><span class="p">[</span><span class="sh">"</span><span class="s">OPENAI_API_KEY</span><span class="sh">"</span><span class="p">],</span>
+<span class="p">)</span></code></pre></figure>
+
+<h2 id="python-tool">Python Tool</h2>
+
+<p>For the implementation of the Python tool, I adapted code from <a href="https://github.com/openai/gpt-oss">gpt-oss</a>.
+The idea is to execute generated Python code using a local Jupyter kernel.
+To ensure robustness and efficiency, the tool includes a time manager that
+limits the execution of each code block to <b>30 seconds</b>,
+which is a reasonable amount of time for this type of task.
+Code that takes significantly longer to run typically contains errors
+or is not relevant to solving the problem.</p>
+
+<figure class="highlight"><pre><code class="language-python" data-lang="python"><span class="k">class</span> <span class="nc">LocalJupyterSession</span><span class="p">:</span>
+    <span class="sh">"""</span><span class="s">Stateful helper that proxies execution through a local Jupyter kernel.</span><span class="sh">"""</span>
+
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span>
+        <span class="n">self</span><span class="p">,</span>
+        <span class="n">connection_file</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="bp">None</span> <span class="o">=</span> <span class="bp">None</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">timeout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">30.0</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="bp">None</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="kn">from</span> <span class="n">jupyter_client</span> <span class="kn">import</span> <span class="n">BlockingKernelClient</span><span class="p">,</span> <span class="n">KernelManager</span>
+        <span class="k">except</span> <span class="nb">ImportError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>  <span class="c1"># pragma: no cover - optional dependency
+</span>            <span class="k">raise</span> <span class="nc">RuntimeError</span><span class="p">(</span>
+                <span class="sh">"</span><span class="s">backend requires the jupyter_client package to be installed.</span><span class="sh">"</span>
+            <span class="p">)</span> <span class="k">from</span> <span class="n">exc</span>
+
+        <span class="n">self</span><span class="p">.</span><span class="n">_default_timeout</span> <span class="o">=</span> <span class="n">timeout</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">_owns_kernel</span> <span class="o">=</span> <span class="bp">False</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">_client</span><span class="p">:</span> <span class="n">BlockingKernelClient</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">_km</span><span class="p">:</span> <span class="n">KernelManager</span> <span class="o">|</span> <span class="bp">None</span> <span class="o">=</span> <span class="bp">None</span>
+
+        <span class="k">if</span> <span class="n">connection_file</span><span class="p">:</span>
+            <span class="n">connection_path</span> <span class="o">=</span> <span class="nc">Path</span><span class="p">(</span><span class="n">connection_file</span><span class="p">).</span><span class="nf">expanduser</span><span class="p">()</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">connection_path</span><span class="p">.</span><span class="nf">exists</span><span class="p">():</span>
+                <span class="k">raise</span> <span class="nc">FileNotFoundError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="sh">"</span><span class="s">Cannot find Jupyter connection file at </span><span class="sh">'</span><span class="si">{</span><span class="n">connection_path</span><span class="si">}</span><span class="sh">'</span><span class="s">.</span><span class="sh">"</span>
+                <span class="p">)</span>
+            <span class="n">client</span> <span class="o">=</span> <span class="nc">BlockingKernelClient</span><span class="p">()</span>
+            <span class="n">client</span><span class="p">.</span><span class="nf">load_connection_file</span><span class="p">(</span><span class="nf">str</span><span class="p">(</span><span class="n">connection_path</span><span class="p">))</span>
+            <span class="n">client</span><span class="p">.</span><span class="nf">start_channels</span><span class="p">()</span>
+            <span class="c1"># Ensure the connection is ready before executing.
+</span>            <span class="n">client</span><span class="p">.</span><span class="nf">wait_for_ready</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="n">self</span><span class="p">.</span><span class="n">_default_timeout</span><span class="p">)</span>
+            <span class="n">self</span><span class="p">.</span><span class="n">_client</span> <span class="o">=</span> <span class="n">client</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">km</span> <span class="o">=</span> <span class="nc">KernelManager</span><span class="p">()</span>
+            <span class="n">km</span><span class="p">.</span><span class="nf">start_kernel</span><span class="p">()</span>
+            <span class="n">client</span> <span class="o">=</span> <span class="n">km</span><span class="p">.</span><span class="nf">blocking_client</span><span class="p">()</span>
+            <span class="n">client</span><span class="p">.</span><span class="nf">start_channels</span><span class="p">()</span>
+            <span class="n">client</span><span class="p">.</span><span class="nf">wait_for_ready</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="n">self</span><span class="p">.</span><span class="n">_default_timeout</span><span class="p">)</span>
+            <span class="n">self</span><span class="p">.</span><span class="n">_client</span> <span class="o">=</span> <span class="n">client</span>
+            <span class="n">self</span><span class="p">.</span><span class="n">_km</span> <span class="o">=</span> <span class="n">km</span>
+            <span class="n">self</span><span class="p">.</span><span class="n">_owns_kernel</span> <span class="o">=</span> <span class="bp">True</span>
+
+    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="n">self</span><span class="p">,</span> <span class="n">code</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">timeout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="bp">None</span> <span class="o">=</span> <span class="bp">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="sh">"""</span><span class="s">Execute code in the kernel, returning combined stdout/stderr output.</span><span class="sh">"""</span>
+
+        <span class="n">client</span> <span class="o">=</span> <span class="n">self</span><span class="p">.</span><span class="n">_client</span>
+        <span class="n">effective_timeout</span> <span class="o">=</span> <span class="n">timeout</span> <span class="ow">or</span> <span class="n">self</span><span class="p">.</span><span class="n">_default_timeout</span>
+        <span class="n">msg_id</span> <span class="o">=</span> <span class="n">client</span><span class="p">.</span><span class="nf">execute</span><span class="p">(</span>
+            <span class="n">code</span><span class="p">,</span>
+            <span class="n">store_history</span><span class="o">=</span><span class="bp">True</span><span class="p">,</span>
+            <span class="n">allow_stdin</span><span class="o">=</span><span class="bp">False</span><span class="p">,</span>
+            <span class="n">stop_on_error</span><span class="o">=</span><span class="bp">False</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="n">stdout_parts</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">stderr_parts</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">msg</span> <span class="o">=</span> <span class="n">client</span><span class="p">.</span><span class="nf">get_iopub_msg</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="n">effective_timeout</span><span class="p">)</span>
+            <span class="k">except</span> <span class="n">queue</span><span class="p">.</span><span class="n">Empty</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="nc">TimeoutError</span><span class="p">(</span><span class="sh">"</span><span class="s">Timed out waiting for Jupyter kernel output.</span><span class="sh">"</span><span class="p">)</span> <span class="k">from</span> <span class="n">exc</span>
+
+            <span class="k">if</span> <span class="n">msg</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">parent_header</span><span class="sh">"</span><span class="p">,</span> <span class="p">{}).</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">msg_id</span><span class="sh">"</span><span class="p">)</span> <span class="o">!=</span> <span class="n">msg_id</span><span class="p">:</span>
+                <span class="k">continue</span>
+
+            <span class="n">msg_type</span> <span class="o">=</span> <span class="n">msg</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">msg_type</span><span class="sh">"</span><span class="p">)</span>
+            <span class="n">content</span> <span class="o">=</span> <span class="n">msg</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">content</span><span class="sh">"</span><span class="p">,</span> <span class="p">{})</span>
+
+            <span class="k">if</span> <span class="n">msg_type</span> <span class="o">==</span> <span class="sh">"</span><span class="s">stream</span><span class="sh">"</span><span class="p">:</span>
+                <span class="n">text</span> <span class="o">=</span> <span class="n">content</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">text</span><span class="sh">"</span><span class="p">,</span> <span class="sh">""</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">content</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">name</span><span class="sh">"</span><span class="p">)</span> <span class="o">==</span> <span class="sh">"</span><span class="s">stdout</span><span class="sh">"</span><span class="p">:</span>
+                    <span class="n">stdout_parts</span><span class="p">.</span><span class="nf">append</span><span class="p">(</span><span class="n">text</span><span class="p">)</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">stderr_parts</span><span class="p">.</span><span class="nf">append</span><span class="p">(</span><span class="n">text</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">msg_type</span> <span class="o">==</span> <span class="sh">"</span><span class="s">error</span><span class="sh">"</span><span class="p">:</span>
+                <span class="n">traceback_data</span> <span class="o">=</span> <span class="n">content</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">traceback</span><span class="sh">"</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">traceback_data</span><span class="p">:</span>
+                    <span class="n">stderr_parts</span><span class="p">.</span><span class="nf">append</span><span class="p">(</span><span class="sh">"</span><span class="se">\n</span><span class="sh">"</span><span class="p">.</span><span class="nf">join</span><span class="p">(</span><span class="n">traceback_data</span><span class="p">))</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">ename</span> <span class="o">=</span> <span class="n">content</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">ename</span><span class="sh">"</span><span class="p">,</span> <span class="sh">""</span><span class="p">)</span>
+                    <span class="n">evalue</span> <span class="o">=</span> <span class="n">content</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">evalue</span><span class="sh">"</span><span class="p">,</span> <span class="sh">""</span><span class="p">)</span>
+                    <span class="n">stderr_parts</span><span class="p">.</span><span class="nf">append</span><span class="p">(</span><span class="sa">f</span><span class="sh">"</span><span class="si">{</span><span class="n">ename</span><span class="si">}</span><span class="s">: </span><span class="si">{</span><span class="n">evalue</span><span class="si">}</span><span class="sh">"</span><span class="p">.</span><span class="nf">strip</span><span class="p">())</span>
+            <span class="k">elif</span> <span class="n">msg_type</span> <span class="ow">in</span> <span class="p">{</span><span class="sh">"</span><span class="s">execute_result</span><span class="sh">"</span><span class="p">,</span> <span class="sh">"</span><span class="s">display_data</span><span class="sh">"</span><span class="p">}:</span>
+                <span class="n">data</span> <span class="o">=</span> <span class="n">content</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">data</span><span class="sh">"</span><span class="p">,</span> <span class="p">{})</span>
+                <span class="n">text</span> <span class="o">=</span> <span class="n">data</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">text/plain</span><span class="sh">"</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">text</span><span class="p">:</span>
+                    <span class="n">stdout_parts</span><span class="p">.</span><span class="nf">append</span><span class="p">(</span><span class="n">text</span> <span class="k">if</span> <span class="n">text</span><span class="p">.</span><span class="nf">endswith</span><span class="p">(</span><span class="sh">"</span><span class="se">\n</span><span class="sh">"</span><span class="p">)</span> <span class="k">else</span> <span class="sa">f</span><span class="sh">"</span><span class="si">{</span><span class="n">text</span><span class="si">}</span><span class="se">\n</span><span class="sh">"</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">msg_type</span> <span class="o">==</span> <span class="sh">"</span><span class="s">status</span><span class="sh">"</span> <span class="ow">and</span> <span class="n">content</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">execution_state</span><span class="sh">"</span><span class="p">)</span> <span class="o">==</span> <span class="sh">"</span><span class="s">idle</span><span class="sh">"</span><span class="p">:</span>
+                <span class="k">break</span>
+
+        <span class="c1"># Drain the shell channel to capture final execution status.
+</span>        <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">reply</span> <span class="o">=</span> <span class="n">client</span><span class="p">.</span><span class="nf">get_shell_msg</span><span class="p">(</span><span class="n">timeout</span><span class="o">=</span><span class="n">effective_timeout</span><span class="p">)</span>
+            <span class="k">except</span> <span class="n">queue</span><span class="p">.</span><span class="n">Empty</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="nc">TimeoutError</span><span class="p">(</span>
+                    <span class="sh">"</span><span class="s">Timed out waiting for Jupyter kernel execution reply.</span><span class="sh">"</span>
+                <span class="p">)</span> <span class="k">from</span> <span class="n">exc</span>
+
+            <span class="k">if</span> <span class="n">reply</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">parent_header</span><span class="sh">"</span><span class="p">,</span> <span class="p">{}).</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">msg_id</span><span class="sh">"</span><span class="p">)</span> <span class="o">!=</span> <span class="n">msg_id</span><span class="p">:</span>
+                <span class="k">continue</span>
+
+            <span class="n">reply_content</span> <span class="o">=</span> <span class="n">reply</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">content</span><span class="sh">"</span><span class="p">,</span> <span class="p">{})</span>
+            <span class="k">if</span> <span class="n">reply_content</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">status</span><span class="sh">"</span><span class="p">)</span> <span class="o">==</span> <span class="sh">"</span><span class="s">error</span><span class="sh">"</span><span class="p">:</span>
+                <span class="n">traceback_data</span> <span class="o">=</span> <span class="n">reply_content</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">traceback</span><span class="sh">"</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">traceback_data</span><span class="p">:</span>
+                    <span class="n">stderr_parts</span><span class="p">.</span><span class="nf">append</span><span class="p">(</span><span class="sh">"</span><span class="se">\n</span><span class="sh">"</span><span class="p">.</span><span class="nf">join</span><span class="p">(</span><span class="n">traceback_data</span><span class="p">))</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">ename</span> <span class="o">=</span> <span class="n">reply_content</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">ename</span><span class="sh">"</span><span class="p">,</span> <span class="sh">""</span><span class="p">)</span>
+                    <span class="n">evalue</span> <span class="o">=</span> <span class="n">reply_content</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">evalue</span><span class="sh">"</span><span class="p">,</span> <span class="sh">""</span><span class="p">)</span>
+                    <span class="n">stderr_parts</span><span class="p">.</span><span class="nf">append</span><span class="p">(</span><span class="sa">f</span><span class="sh">"</span><span class="si">{</span><span class="n">ename</span><span class="si">}</span><span class="s">: </span><span class="si">{</span><span class="n">evalue</span><span class="si">}</span><span class="sh">"</span><span class="p">.</span><span class="nf">strip</span><span class="p">())</span>
+            <span class="k">break</span>
+
+        <span class="n">stdout</span> <span class="o">=</span> <span class="sh">""</span><span class="p">.</span><span class="nf">join</span><span class="p">(</span><span class="n">stdout_parts</span><span class="p">)</span>
+        <span class="n">stderr</span> <span class="o">=</span> <span class="sh">""</span><span class="p">.</span><span class="nf">join</span><span class="p">(</span><span class="n">stderr_parts</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">stderr</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">stdout</span><span class="p">:</span>
+                <span class="n">stdout</span> <span class="o">=</span> <span class="sa">f</span><span class="sh">"</span><span class="si">{</span><span class="n">stdout</span><span class="p">.</span><span class="nf">rstrip</span><span class="p">()</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="n">stderr</span><span class="si">}</span><span class="sh">"</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">stdout</span> <span class="o">=</span> <span class="n">stderr</span>
+
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">stdout</span><span class="p">.</span><span class="nf">strip</span><span class="p">():</span>
+            <span class="n">stdout</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="sh">"</span><span class="s">[WARN] No output available. Use print() to output anything to stdout to </span><span class="sh">"</span>
+                <span class="sh">"</span><span class="s">receive the output</span><span class="sh">"</span>
+            <span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">stdout</span>
+
+    <span class="k">def</span> <span class="nf">close</span><span class="p">(</span><span class="n">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="bp">None</span><span class="p">:</span>
+        <span class="k">with</span> <span class="n">contextlib</span><span class="p">.</span><span class="nf">suppress</span><span class="p">(</span><span class="nb">Exception</span><span class="p">):</span>
+            <span class="n">self</span><span class="p">.</span><span class="n">_client</span><span class="p">.</span><span class="nf">stop_channels</span><span class="p">()</span>
+
+        <span class="k">if</span> <span class="n">self</span><span class="p">.</span><span class="n">_owns_kernel</span> <span class="ow">and</span> <span class="n">self</span><span class="p">.</span><span class="n">_km</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="k">with</span> <span class="n">contextlib</span><span class="p">.</span><span class="nf">suppress</span><span class="p">(</span><span class="nb">Exception</span><span class="p">):</span>
+                <span class="n">self</span><span class="p">.</span><span class="n">_km</span><span class="p">.</span><span class="nf">shutdown_kernel</span><span class="p">(</span><span class="n">now</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">__del__</span><span class="p">(</span><span class="n">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="bp">None</span><span class="p">:</span>  <span class="c1"># pragma: no cover - best-effort cleanup
+</span>        <span class="n">self</span><span class="p">.</span><span class="nf">close</span><span class="p">()</span>
+
+<span class="k">class</span> <span class="nc">PythonTool</span><span class="p">():</span>
+    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span>
+        <span class="n">self</span><span class="p">,</span>
+        <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="sh">"</span><span class="s">python</span><span class="sh">"</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">local_jupyter_connection_file</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="bp">None</span> <span class="o">=</span> <span class="bp">None</span><span class="p">,</span>
+        <span class="n">local_jupyter_timeout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">60.0</span><span class="p">,</span>
+    <span class="p">):</span>
+        <span class="k">assert</span> <span class="n">name</span> <span class="o">==</span> <span class="sh">"</span><span class="s">python</span><span class="sh">"</span>
+
+        <span class="n">self</span><span class="p">.</span><span class="n">_local_jupyter_connection_file</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">local_jupyter_connection_file</span>
+            <span class="ow">or</span> <span class="n">os</span><span class="p">.</span><span class="n">environ</span><span class="p">.</span><span class="nf">get</span><span class="p">(</span><span class="sh">"</span><span class="s">PYTHON_LOCAL_JUPYTER_CONNECTION_FILE</span><span class="sh">"</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">_local_jupyter_timeout</span> <span class="o">=</span> <span class="n">local_jupyter_timeout</span>
+
+        <span class="n">self</span><span class="p">.</span><span class="n">_execution_lock</span> <span class="o">=</span> <span class="n">threading</span><span class="p">.</span><span class="nc">Lock</span><span class="p">()</span>
+        <span class="n">self</span><span class="p">.</span><span class="n">_jupyter_session</span> <span class="o">=</span> <span class="nc">LocalJupyterSession</span><span class="p">(</span>
+            <span class="n">connection_file</span><span class="o">=</span><span class="n">self</span><span class="p">.</span><span class="n">_local_jupyter_connection_file</span><span class="p">,</span>
+            <span class="n">timeout</span><span class="o">=</span><span class="n">self</span><span class="p">.</span><span class="n">_local_jupyter_timeout</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span> <span class="nf">get_tool_name</span><span class="p">(</span><span class="n">cls</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sh">"</span><span class="s">python</span><span class="sh">"</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">name</span><span class="p">(</span><span class="n">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">self</span><span class="p">.</span><span class="nf">get_tool_name</span><span class="p">()</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">instruction</span><span class="p">(</span><span class="n">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sh">"""</span><span class="s">
+Use this tool to execute Python code in your chain of thought. The code will not be shown to the user. This tool should be used for internal reasoning, but not for code that is intended to be visible to the user (e.g. when creating plots, tables, or files).
+When you send a message containing Python code to python, it will be executed in a stateful Jupyter notebook environment. python will respond with the output of the execution or time out after 120.0 seconds. Internet access for this session is UNKNOWN. Depends on the cluster.
+            </span><span class="sh">"""</span><span class="p">.</span><span class="nf">strip</span><span class="p">()</span>
+
+       
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">tool_config</span><span class="p">(</span><span class="n">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ToolNamespaceConfig</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nc">ToolNamespaceConfig</span><span class="p">(</span>
+            <span class="n">name</span><span class="o">=</span><span class="n">self</span><span class="p">.</span><span class="nf">get_tool_name</span><span class="p">(),</span> <span class="n">description</span><span class="o">=</span><span class="n">self</span><span class="p">.</span><span class="n">instruction</span><span class="p">,</span> <span class="n">tools</span><span class="o">=</span><span class="p">[]</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_make_response</span><span class="p">(</span>
+        <span class="n">self</span><span class="p">,</span>
+        <span class="n">output</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">channel</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="bp">None</span> <span class="o">=</span> <span class="bp">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Message</span><span class="p">:</span>
+        <span class="n">content</span> <span class="o">=</span> <span class="nc">TextContent</span><span class="p">(</span><span class="n">text</span><span class="o">=</span><span class="n">output</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">self</span><span class="p">.</span><span class="nf">make_response</span><span class="p">(</span><span class="n">content</span><span class="o">=</span><span class="n">content</span><span class="p">,</span> <span class="n">channel</span><span class="o">=</span><span class="n">channel</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">make_response</span><span class="p">(</span>
+        <span class="n">self</span><span class="p">,</span>
+        <span class="n">content</span><span class="p">:</span> <span class="n">Content</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="bp">None</span> <span class="o">=</span> <span class="bp">None</span><span class="p">,</span>
+        <span class="n">author</span><span class="p">:</span> <span class="n">Author</span> <span class="o">|</span> <span class="bp">None</span> <span class="o">=</span> <span class="bp">None</span><span class="p">,</span>
+        <span class="n">channel</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="bp">None</span> <span class="o">=</span> <span class="bp">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Message</span><span class="p">:</span>
+        <span class="n">tool_name</span> <span class="o">=</span> <span class="n">self</span><span class="p">.</span><span class="nf">get_tool_name</span><span class="p">()</span>
+        <span class="n">author</span> <span class="o">=</span> <span class="nc">Author</span><span class="p">(</span><span class="n">role</span><span class="o">=</span><span class="n">Role</span><span class="p">.</span><span class="n">TOOL</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="sh">"</span><span class="si">{</span><span class="n">tool_name</span><span class="si">}</span><span class="sh">"</span><span class="p">)</span>
+
+        <span class="n">message</span> <span class="o">=</span> <span class="nc">Message</span><span class="p">(</span>
+            <span class="n">author</span><span class="o">=</span><span class="n">author</span><span class="p">,</span>
+            <span class="n">content</span><span class="o">=</span><span class="p">[</span><span class="n">content</span><span class="p">],</span>
+        <span class="p">).</span><span class="nf">with_recipient</span><span class="p">(</span><span class="sh">"</span><span class="s">assistant</span><span class="sh">"</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">channel</span><span class="p">:</span>
+            <span class="n">message</span> <span class="o">=</span> <span class="n">message</span><span class="p">.</span><span class="nf">with_channel</span><span class="p">(</span><span class="n">channel</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">message</span>
+
+    <span class="k">def</span> <span class="nf">_process</span><span class="p">(</span><span class="n">self</span><span class="p">,</span> <span class="n">message</span><span class="p">:</span> <span class="n">Message</span><span class="p">):</span>
+        <span class="n">script</span> <span class="o">=</span> <span class="n">message</span><span class="p">.</span><span class="n">content</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="n">text</span>
+        <span class="n">channel</span> <span class="o">=</span> <span class="n">message</span><span class="p">.</span><span class="n">channel</span>
+
+        
+        <span class="k">assert</span> <span class="n">self</span><span class="p">.</span><span class="n">_jupyter_session</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span>
+        <span class="n">lock</span> <span class="o">=</span> <span class="n">self</span><span class="p">.</span><span class="n">_execution_lock</span>
+        <span class="k">if</span> <span class="n">lock</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span>
+             <span class="k">with</span> <span class="n">lock</span><span class="p">:</span>
+                <span class="k">try</span><span class="p">:</span>
+                    <span class="n">output</span> <span class="o">=</span> <span class="n">self</span><span class="p">.</span><span class="n">_jupyter_session</span><span class="p">.</span><span class="nf">execute</span><span class="p">(</span><span class="n">script</span><span class="p">)</span>
+                <span class="k">except</span> <span class="nb">TimeoutError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+                    <span class="n">output</span> <span class="o">=</span> <span class="sa">f</span><span class="sh">"</span><span class="s">[ERROR] </span><span class="si">{</span><span class="n">exc</span><span class="si">}</span><span class="sh">"</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">output</span> <span class="o">=</span> <span class="n">self</span><span class="p">.</span><span class="n">_jupyter_session</span><span class="p">.</span><span class="nf">execute</span><span class="p">(</span><span class="n">script</span><span class="p">)</span>
+            <span class="k">except</span> <span class="nb">TimeoutError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+                <span class="n">output</span> <span class="o">=</span> <span class="sa">f</span><span class="sh">"</span><span class="s">[ERROR] </span><span class="si">{</span><span class="n">exc</span><span class="si">}</span><span class="sh">"</span>
+        
+        <span class="k">yield</span> <span class="n">self</span><span class="p">.</span><span class="nf">_make_response</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">channel</span><span class="o">=</span><span class="n">channel</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">close</span><span class="p">(</span><span class="n">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="bp">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">self</span><span class="p">.</span><span class="n">_jupyter_session</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span><span class="p">:</span>
+            <span class="n">self</span><span class="p">.</span><span class="n">_jupyter_session</span><span class="p">.</span><span class="nf">close</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">__del__</span><span class="p">(</span><span class="n">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="bp">None</span><span class="p">:</span>
+        <span class="n">self</span><span class="p">.</span><span class="nf">close</span><span class="p">()</span></code></pre></figure>
+
+<h2 id="inference">Inference</h2>
+<p>We can now define the function that represents the core of the pipeline.
+The <code class="language-plaintext highlighter-rouge">generate_solution</code> function performs a single generation, given
+as input the problem and the system prompt to be used.</p>
+
+<figure class="highlight"><pre><code class="language-python" data-lang="python"><span class="k">def</span> <span class="nf">generate_solution</span><span class="p">(</span>
+    <span class="n">question_text</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">question_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="sh">""</span><span class="p">,</span> <span class="n">solution_index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">system_prompt</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="sh">""</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">question_id</span> <span class="ow">in</span> <span class="n">completed_question_ids</span><span class="p">:</span>
+        <span class="k">return</span> <span class="sh">""</span>
+    
+    <span class="n">python_tool</span> <span class="o">=</span> <span class="nc">PythonTool</span><span class="p">()</span>
+    <span class="n">harmony_encoding</span> <span class="o">=</span> <span class="nf">load_harmony_encoding</span><span class="p">(</span><span class="n">HarmonyEncodingName</span><span class="p">.</span><span class="n">HARMONY_GPT_OSS</span><span class="p">)</span>
+    <span class="n">stop_token_ids</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="nf">list</span><span class="p">(</span><span class="n">harmony_encoding</span><span class="p">.</span><span class="nf">stop_tokens_for_assistant_actions</span><span class="p">())</span>
+    
+    <span class="k">try</span><span class="p">:</span>
+        <span class="c1"># Build system message with TIR support
+</span>        <span class="n">system_content_obj</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">SystemContent</span><span class="p">.</span><span class="nf">new</span><span class="p">()</span>
+            <span class="p">.</span><span class="nf">with_reasoning_effort</span><span class="p">(</span><span class="n">ReasoningEffort</span><span class="p">.</span><span class="n">HIGH</span><span class="p">)</span>
+            <span class="p">.</span><span class="nf">with_tools</span><span class="p">(</span><span class="n">python_tool</span><span class="p">.</span><span class="n">tool_config</span><span class="p">)</span>
+        <span class="p">)</span>
+        
+        <span class="n">system_message</span> <span class="o">=</span> <span class="n">Message</span><span class="p">.</span><span class="nf">from_role_and_content</span><span class="p">(</span><span class="n">Role</span><span class="p">.</span><span class="n">SYSTEM</span><span class="p">,</span> <span class="n">system_content_obj</span><span class="p">)</span>
+        <span class="n">developer_message</span> <span class="o">=</span> <span class="n">Message</span><span class="p">.</span><span class="nf">from_role_and_content</span><span class="p">(</span><span class="n">Role</span><span class="p">.</span><span class="n">DEVELOPER</span><span class="p">,</span> <span class="n">system_prompt</span><span class="p">)</span>
+        <span class="n">user_message</span> <span class="o">=</span> <span class="n">Message</span><span class="p">.</span><span class="nf">from_role_and_content</span><span class="p">(</span><span class="n">Role</span><span class="p">.</span><span class="n">USER</span><span class="p">,</span> <span class="n">question_text</span><span class="p">)</span>
+        
+        <span class="n">messages</span> <span class="o">=</span> <span class="p">[</span><span class="n">system_message</span><span class="p">,</span> <span class="n">developer_message</span><span class="p">,</span> <span class="n">user_message</span><span class="p">]</span>
+        
+       
+     
+        <span class="n">total_response</span> <span class="o">=</span> <span class="sh">""</span>
+        <span class="n">total_tokens</span> <span class="o">=</span> <span class="mi">0</span>
+        
+        <span class="k">while</span> <span class="bp">True</span><span class="p">:</span> 
+            
+            <span class="c1"># Check global completion
+</span>            <span class="k">if</span> <span class="n">question_id</span> <span class="ow">in</span> <span class="n">completed_question_ids</span><span class="p">:</span>
+                <span class="k">break</span>
+
+            <span class="n">convo</span> <span class="o">=</span> <span class="n">Conversation</span><span class="p">.</span><span class="nf">from_messages</span><span class="p">(</span><span class="n">messages</span><span class="p">)</span>
+            <span class="n">prompt_ids</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">harmony_encoding</span><span class="p">.</span><span class="nf">render_conversation_for_completion</span><span class="p">(</span>
+                <span class="n">convo</span><span class="p">,</span> <span class="n">Role</span><span class="p">.</span><span class="n">ASSISTANT</span>
+            <span class="p">)</span>
+            
+            <span class="n">response</span> <span class="o">=</span> <span class="n">client</span><span class="p">.</span><span class="n">completions</span><span class="p">.</span><span class="nf">create</span><span class="p">(</span>
+                <span class="n">model</span><span class="o">=</span><span class="sh">"</span><span class="s">vllm-model</span><span class="sh">"</span><span class="p">,</span>
+                <span class="n">prompt</span><span class="o">=</span><span class="n">prompt_ids</span><span class="p">,</span>
+                <span class="n">max_tokens</span><span class="o">=</span><span class="mi">2048</span><span class="p">,</span>
+                <span class="n">temperature</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span>
+                <span class="n">stream</span><span class="o">=</span><span class="bp">False</span><span class="p">,</span>
+                <span class="n">extra_body</span><span class="o">=</span><span class="nf">dict</span><span class="p">(</span>
+                    <span class="n">min_p</span><span class="o">=</span><span class="mf">0.02</span><span class="p">,</span>
+                    <span class="n">stop_token_ids</span><span class="o">=</span><span class="n">stop_token_ids</span><span class="p">,</span>
+                    <span class="n">return_token_ids</span><span class="o">=</span><span class="bp">True</span><span class="p">,</span>
+                <span class="p">),</span>
+            <span class="p">)</span>
+            
+            <span class="n">response_ids</span> <span class="o">=</span> <span class="nf">getattr</span><span class="p">(</span><span class="n">response</span><span class="p">.</span><span class="n">choices</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="sh">"</span><span class="s">token_ids</span><span class="sh">"</span><span class="p">,</span> <span class="p">[])</span>
+            <span class="n">text_response</span> <span class="o">=</span> <span class="n">response</span><span class="p">.</span><span class="n">choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="n">text</span> <span class="ow">or</span> <span class="sh">""</span>
+            <span class="n">finish_reason</span> <span class="o">=</span> <span class="n">response</span><span class="p">.</span><span class="n">choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="n">finish_reason</span>
+            <span class="n">total_response</span> <span class="o">+=</span> <span class="n">text_response</span>
+            <span class="n">total_tokens</span> <span class="o">+=</span> <span class="nf">len</span><span class="p">(</span><span class="n">response_ids</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">total_tokens</span> <span class="o">&gt;=</span> <span class="mi">65_536</span><span class="p">:</span>
+                <span class="nf">print</span><span class="p">(</span><span class="sa">f</span><span class="sh">"</span><span class="s">[</span><span class="si">{</span><span class="n">question_id</span><span class="si">}</span><span class="s">:</span><span class="si">{</span><span class="n">solution_index</span><span class="si">}</span><span class="s">] Token limit reached</span><span class="sh">"</span><span class="p">)</span>
+                <span class="k">break</span>
+            
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">response_ids</span><span class="p">:</span>
+                <span class="nf">print</span><span class="p">(</span><span class="sa">f</span><span class="sh">"</span><span class="s">[</span><span class="si">{</span><span class="n">question_id</span><span class="si">}</span><span class="s">:</span><span class="si">{</span><span class="n">solution_index</span><span class="si">}</span><span class="s">] No tokens generated, breaking</span><span class="sh">"</span><span class="p">)</span>
+                <span class="k">break</span>
+            
+            <span class="c1"># Parse messages FIRST
+</span>            <span class="n">new_messages</span> <span class="o">=</span> <span class="n">harmony_encoding</span><span class="p">.</span><span class="nf">parse_messages_from_completion_tokens</span><span class="p">(</span>
+                <span class="n">response_ids</span><span class="p">,</span> <span class="n">Role</span><span class="p">.</span><span class="n">ASSISTANT</span>
+            <span class="p">)</span>
+            <span class="n">messages</span><span class="p">.</span><span class="nf">extend</span><span class="p">(</span><span class="n">new_messages</span><span class="p">)</span>
+            <span class="n">last_message</span> <span class="o">=</span> <span class="n">new_messages</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+            <span class="c1"># Handle tool calls BEFORE checking answer
+</span>            <span class="k">if</span> <span class="n">last_message</span><span class="p">.</span><span class="n">recipient</span> <span class="o">==</span> <span class="sh">"</span><span class="s">python</span><span class="sh">"</span><span class="p">:</span>
+                <span class="n">response_messages</span> <span class="o">=</span> <span class="n">python_tool</span><span class="p">.</span><span class="nf">_process</span><span class="p">(</span><span class="n">last_message</span><span class="p">)</span>
+                <span class="n">messages</span><span class="p">.</span><span class="nf">extend</span><span class="p">(</span><span class="n">response_messages</span><span class="p">)</span>
+                <span class="k">continue</span>
+
+            <span class="c1"># NOW check for valid answer
+</span>            <span class="n">boxed_text</span> <span class="o">=</span> <span class="nf">extract_boxed_text</span><span class="p">(</span><span class="n">text_response</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nf">is_valid_answer_string</span><span class="p">(</span><span class="n">boxed_text</span><span class="p">):</span>
+                <span class="nf">print</span><span class="p">(</span><span class="sa">f</span><span class="sh">"</span><span class="s">[</span><span class="si">{</span><span class="n">question_id</span><span class="si">}</span><span class="s">:</span><span class="si">{</span><span class="n">solution_index</span><span class="si">}</span><span class="s">] Valid answer found: </span><span class="si">{</span><span class="n">boxed_text</span><span class="si">}</span><span class="sh">"</span><span class="p">)</span>
+                <span class="k">break</span>
+            
+            <span class="c1"># Nudge towards completion
+</span>            <span class="k">if</span> <span class="n">total_tokens</span> <span class="o">&gt;=</span> <span class="mi">10_000</span><span class="p">:</span>
+                <span class="n">finish_msg</span> <span class="o">=</span> <span class="n">Message</span><span class="p">.</span><span class="nf">from_role_and_content</span><span class="p">(</span>
+                    <span class="n">Role</span><span class="p">.</span><span class="n">USER</span><span class="p">,</span>
+                    <span class="sh">"</span><span class="s">Provide your final answer in </span><span class="se">\\</span><span class="s">boxed{} now.</span><span class="sh">"</span>
+                <span class="p">)</span>
+                <span class="n">messages</span><span class="p">.</span><span class="nf">append</span><span class="p">(</span><span class="n">finish_msg</span><span class="p">)</span>
+                <span class="k">continue</span>  <span class="c1"># Go to next iteration
+</span>
+            <span class="k">if</span> <span class="n">finish_reason</span> <span class="o">==</span> <span class="sh">'</span><span class="s">stop</span><span class="sh">'</span><span class="p">:</span>
+                <span class="n">skip_msg</span> <span class="o">=</span> <span class="n">Message</span><span class="p">.</span><span class="nf">from_role_and_content</span><span class="p">(</span>
+                    <span class="n">Role</span><span class="p">.</span><span class="n">USER</span><span class="p">,</span>
+                    <span class="sh">"</span><span class="s">Provide your final answer in </span><span class="se">\\</span><span class="s">boxed{} now.</span><span class="sh">"</span>
+                <span class="p">)</span>
+                <span class="n">messages</span><span class="p">.</span><span class="nf">append</span><span class="p">(</span><span class="n">skip_msg</span><span class="p">)</span>
+        
+        <span class="c1"># Final extraction
+</span>        <span class="n">boxed_text</span> <span class="o">=</span> <span class="nf">extract_boxed_text</span><span class="p">(</span><span class="n">total_response</span><span class="p">)</span>
+        
+        <span class="c1"># Save results
+</span>        <span class="n">path</span> <span class="o">=</span> <span class="sa">f</span><span class="sh">"</span><span class="s">solutions/</span><span class="si">{</span><span class="n">question_id</span><span class="si">}</span><span class="s">/</span><span class="si">{</span><span class="n">solution_index</span><span class="si">}</span><span class="s">.txt</span><span class="sh">"</span>
+        <span class="k">with</span> <span class="nf">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="sh">"</span><span class="s">w</span><span class="sh">"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="n">f</span><span class="p">.</span><span class="nf">write</span><span class="p">(</span><span class="n">total_response</span><span class="p">)</span>
+        
+        <span class="c1"># Record answer for voting
+</span>        <span class="k">if</span> <span class="nf">is_valid_answer_string</span><span class="p">(</span><span class="n">boxed_text</span><span class="p">):</span>
+            <span class="n">question_id_to_counter</span><span class="p">[</span><span class="n">question_id</span><span class="p">][</span><span class="nf">int</span><span class="p">(</span><span class="n">boxed_text</span><span class="p">)]</span> <span class="o">+=</span> <span class="mi">1</span>
+            <span class="nf">vote_answer</span><span class="p">(</span><span class="n">question_id</span><span class="p">)</span>
+            <span class="nf">print</span><span class="p">(</span><span class="sa">f</span><span class="sh">"</span><span class="s">[</span><span class="si">{</span><span class="n">question_id</span><span class="si">}</span><span class="s">:</span><span class="si">{</span><span class="n">solution_index</span><span class="si">}</span><span class="s">] Final answer: </span><span class="si">{</span><span class="n">boxed_text</span><span class="si">}</span><span class="sh">"</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="nf">print</span><span class="p">(</span><span class="sa">f</span><span class="sh">"</span><span class="s">[</span><span class="si">{</span><span class="n">question_id</span><span class="si">}</span><span class="s">:</span><span class="si">{</span><span class="n">solution_index</span><span class="si">}</span><span class="s">] No valid answer found</span><span class="sh">"</span><span class="p">)</span>
+        
+        <span class="k">return</span> <span class="n">boxed_text</span>
+        
+    <span class="k">except</span> <span class="nb">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="nf">print</span><span class="p">(</span><span class="sa">f</span><span class="sh">"</span><span class="s">[</span><span class="si">{</span><span class="n">question_id</span><span class="si">}</span><span class="s">:</span><span class="si">{</span><span class="n">solution_index</span><span class="si">}</span><span class="s">] Error: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="sh">"</span><span class="p">)</span>
+        <span class="k">return</span> <span class="sh">""</span>
+    
+    <span class="k">finally</span><span class="p">:</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">python_tool</span><span class="p">.</span><span class="nf">close</span><span class="p">()</span>
+        <span class="k">except</span> <span class="nb">Exception</span><span class="p">:</span>
+            <span class="k">pass</span></code></pre></figure>
+
+<p>As described in the introduction, the process starts from a default
+prompt containing the system message and the problem to be solved.
+The model then generates the first 2048 tokens. If Python code is detected,
+it is executed and the results are extracted. Both the model’s
+response at the current step and the execution results are then
+appended to the conversation context.<br />
+<br />
+This allows the model, at the next iteration, to continue generating its response while taking into account the results of the code
+executed in the previous step.<br />
+The loop terminates when one of the following conditions is met:<br />
+1) The total number of generated tokens exceeds <b>65.536</b><br />
+2) The question has been marked as completed by the voting mechanism.<br />
+3) A valid answer is found<br /></p>
+
+<p>Finally, combining all components together, we define the <code class="language-plaintext highlighter-rouge">solve</code>
+function. Given a question and its corresponding ID, this function orchestrates the full pipeline and returns the final answer</p>
+
+<figure class="highlight"><pre><code class="language-python" data-lang="python"><span class="k">def</span> <span class="nf">solve</span><span class="p">(</span><span class="n">question_text</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">question_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="sh">""</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="nf">await_client</span><span class="p">()</span>
+    
+    <span class="nf">print</span><span class="p">(</span><span class="sa">f</span><span class="sh">"</span><span class="s">processing </span><span class="si">{</span><span class="n">question_id</span><span class="si">}</span><span class="sh">"</span><span class="p">)</span>
+    <span class="n">os</span><span class="p">.</span><span class="nf">makedirs</span><span class="p">(</span><span class="sa">f</span><span class="sh">"</span><span class="s">solutions/</span><span class="si">{</span><span class="n">question_id</span><span class="si">}</span><span class="sh">"</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
+    <span class="n">question_id_to_counter</span><span class="p">[</span><span class="n">question_id</span><span class="p">]</span> <span class="o">=</span> <span class="nc">Counter</span><span class="p">()</span>
+    <span class="n">completed_question_ids</span><span class="p">.</span><span class="nf">discard</span><span class="p">(</span><span class="n">question_id</span><span class="p">)</span>  <span class="c1"># just in case question_id collides
+</span>    
+    <span class="n">num_generations</span> <span class="o">=</span> <span class="mi">8</span>
+
+    <span class="k">with</span> <span class="n">concurrent</span><span class="p">.</span><span class="n">futures</span><span class="p">.</span><span class="nc">ThreadPoolExecutor</span><span class="p">(</span><span class="n">max_workers</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span> <span class="k">as</span> <span class="n">executor</span><span class="p">:</span>
+        <span class="c1"># run in parallel with different system prompts
+</span>        <span class="n">results</span> <span class="o">=</span> <span class="n">executor</span><span class="p">.</span><span class="nf">map</span><span class="p">(</span>
+            <span class="n">generate_solution</span><span class="p">,</span>
+            <span class="p">[</span><span class="n">question_text</span><span class="p">]</span> <span class="o">*</span> <span class="n">num_generations</span><span class="p">,</span>
+            <span class="p">[</span><span class="n">question_id</span><span class="p">]</span> <span class="o">*</span> <span class="n">num_generations</span><span class="p">,</span>
+            <span class="nf">list</span><span class="p">(</span><span class="nf">range</span><span class="p">(</span><span class="n">num_generations</span><span class="p">)),</span>
+            <span class="n">SYSTEM_PROMPTS</span>
+        <span class="p">)</span>
+        <span class="nf">list</span><span class="p">(</span><span class="n">results</span><span class="p">)</span>
+    
+    
+    <span class="n">final_answer</span> <span class="o">=</span> <span class="nf">vote_answer</span><span class="p">(</span><span class="n">question_id</span><span class="p">)</span>
+    
+    <span class="k">return</span> <span class="n">final_answer</span></code></pre></figure>
+
+<h2 id="evaluation">Evaluation</h2>
+
+<p>The pipeline was evaluated on 35 IMO-level problems. 
+The problems were extracted from
+the [olympiads-ref-base dataset] (https://huggingface.co/datasets/AI-MO/olympiads-ref-base).
+Specifically, I selected the first 35 problems with integer solutions.
+The model correctly solved <b>26 out of 35 problems (74,28%)</b> problems,
+which is a strong result considering the difficulty of the tasks and the
+fact that no fine-tuning tecniques where applied.<br />
+The full source code, along with the evaluation dataset and experimental setup, is available on my GitHub repository.</p>

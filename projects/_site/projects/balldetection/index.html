@@ -1,0 +1,24 @@
+<p>Here I will explain the process to build an object detector model
+using YOLOv8. In particular we will see how to use the YOLO models family
+to build a model that tracks in real time the ball during soccer matches.</p>
+
+<h2 id="introduction">Introduction</h2>
+<p>The <object detection=""> is a task where the goal is to detect multimple objects from a single image. In particular this task can be seen
+as the merge of two tasks:<br />
+1) <b> Classification </b>: What king of object I am looking at? <br />
+2) <b> Localization </b>: Where the object is located?<br /></object></p>
+
+<p>I last years a lot of models have been relased, for this project I chosed YOLO (in particular the 8-th version). The major reason behind this decision is
+the speed.
+YOLO is a <b>one stage</b> object detection architecture: this means that localization and classification are performed in</p>
+
+<p>a single forward pass. This aspects improves speed and makes the model particularly suited for real-time detection. It can process on average more
+ the 100 FPS (Frame-per-second) where other models like Faster R-CNN, R-CNN  have a thoughput of 10 FPS.</p>
+
+<p><img src="/assets/images/yoloarchitecture.jpg" alt="YOLOv8 Architecture" /></p>
+
+<p>The architecture can be split up into three main components: <br />
+1) A backbone that consists of convolutional layers for feature extraction, interleaved with a layer
+called <b>C2f</b> that is used to provide richer gradient flow information. At the end of the backbone a <b>SPPF</b>
+module used.<br />
+2) A <b>PAN-FPN</b> architecture is employed to</p>

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/assets/css/main.css">
+    <link rel="stylesheet" href="/assets/css/code.css">    
+    </head>
+<body>
+
+    <header>
+        <div class="container nav-container">
+            <nav>
+                <a href="/" class="nav-link">Home</a>
+                <a href="/about/" class="nav-link">About</a>
+                <a href="/projects/" class="nav-link">Projects</a>
+                <a href="#" class="nav-link">Resume</a>
+            </nav>
+        </div>
+    </header>
+	
+    <main class="container">
+        {{ content }}
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>&copy; {{ site.time | date: "%Y" }} | Built with Jekyll and Claude.</p>
+        </div>
+    </footer>
+
+</body>
+</html>
