@@ -61,7 +61,7 @@ title: Home
   {% for project in featured_projects %}
   <div class="project-card">
     <div class="card-image-wrapper">
-      <img src="{{project.image}}" class="card-img" alt="{{project.title}}">
+      <img src="{{ site.baseurl }}{{project.image}}" class="card-img" alt="{{project.title}}">
     </div>
     <div class="card-content">
       <h3 class="card-title">{{project.title}}</h3>
