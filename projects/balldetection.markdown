@@ -127,7 +127,7 @@ The table below summarizes the main training hyperparameters:<br>
 {: .tech-table}
 <br>
 <div style="display: flex; justify-content: center;">
-  <img src="/assets/images/yolores.png" alt="yolo loss trend" style="width: 60%;">
+  <img src="{{ site.baseurl }}/assets/images/yolores.png" alt="yolo loss trend" style="width: 60%;">
 </div>
 
 ## Inference Results
