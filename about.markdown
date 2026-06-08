@@ -7,7 +7,7 @@ permalink: /about/
 <div class="about-hero">
   <div class="about-hero-content">
     <div class="about-photo-wrapper">
-      <img src="/assets/images/profile.jpeg" alt="Pietro" class="about-image">
+      <img src="{{ site.baseurl }}/assets/images/profile.jpeg" alt="Pietro" class="about-image">
     </div>
     <div class="about-intro">
       <span class="eyebrow">AI Engineer</span>
