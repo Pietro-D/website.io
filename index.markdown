@@ -71,7 +71,7 @@ title: Home
         <span class="skill-tag">{{tool}}</span>
         {% endfor %}
       </div>
-      <a href="{{project.permalink}}" class="card-link">Explore Case Study →</a>
+      <a href="{{ site.baseurl }}{{project.permalink}}" class="card-link">Explore Case Study →</a>
     </div>
   </div>
   {% endfor %}
