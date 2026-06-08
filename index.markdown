@@ -5,7 +5,7 @@ title: Home
 
 <div class="hero-container">
   <div class="hero-image-side">
-    <img src="{{ site.baseurl }}\assets\images\profile.jpeg" alt="Pietro" class="hero-profile-img">
+    <img src="{{ site.baseurl }}/assets/images/profile.jpeg" alt="Pietro" class="hero-profile-img">
   </div>
 
   <div class="hero-content-main">
