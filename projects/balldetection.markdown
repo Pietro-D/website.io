@@ -93,7 +93,7 @@ transformations are applied:
 The image below shows a batch of four images after mosaic augmentation
 has been applied.
 
-<img src="/assets/images/mosaicaugmentation.png" alt="batch of 4 images with mosaic augmentation ">
+<img src="{{ site.baseurl }}/assets/images/mosaicaugmentation.png" alt="batch of 4 images with mosaic augmentation ">
 
 ## Loss and Training Setting
 
