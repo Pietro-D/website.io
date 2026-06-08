@@ -35,7 +35,7 @@ real-time applications. In fact, YOLO can process on average more
 the 100 frames per second (FPS), whereas other models such as Faster R-CNN
 and R-CNN typically process around 10 FPS.
 
-<img src="/assets/images/yoloarchitecture.jpg" alt="YOLOv8 Architecture">
+<img src="{{ site.baseurl }}/assets/images/yoloarchitecture.jpg" alt="YOLOv8 Architecture">
 
 
 Before diving deeper into the design choices, let's take a closer look
